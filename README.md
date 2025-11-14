@@ -6,4 +6,4 @@ The `Dockerfile` defines a Jupyter environment based on the `jupyter/datascience
 
 Edit `requirements.txt` to configure additional packages to be installed with `pip`; restart the container to take effect.
 
-The interface is hosted at `127.0.0.1:8888` - a URL is printed at container startup including the auth token.
+The interface is hosted at `127.0.0.1:8888` - a URL is printed at container startup that includes the required auth token.
