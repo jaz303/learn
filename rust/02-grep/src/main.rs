@@ -54,6 +54,7 @@ fn main() -> Result<(), std::io::Error> {
     let mut file = File::open(args.path)?;
 
     // seed the buffer with the initial bytes (up to pattern length - 1)
+    // what we're doing here is borrowing a mutable slice from the vector
     match file.read_exact(&mut ring[0..pattern.len() - 1]) {
         Ok(()) => { /* bytes read OK - nothing to do */ }
         Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
@@ -67,7 +68,7 @@ fn main() -> Result<(), std::io::Error> {
     // 2nd form is more idiomatic... leaving the first in as a comment to remind me that you
     // can borrow an arbitrary slice view of the backing store.
     // let buffer = &mut ring[0..pattern.len()];
-    let buffer = &mut ring;
+    let buffer = &mut ring[..];
 
     // ring buffer write pointer
     let mut wp: usize = pattern.len() - 1;
