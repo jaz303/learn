@@ -2,13 +2,17 @@
 
 I'm learning Rust. Just grinding small useless projects until it becomes automatic.
 
-## Completed Projects
+## Projects
 
 ### `dupes`
 
 Find duplicate files in directory; `clap` CLI, parallel hashing, recursive option.
 
+### `grep` (WIP)
+
 ## Ideas
+
+Just some ideas... I doubt I'll do all of these... just enough until I can make real stuff.
 
   - Networking:
     - some sort HTTP API client
@@ -29,6 +33,8 @@ Find duplicate files in directory; `clap` CLI, parallel hashing, recursive optio
     - kilo-style text editor (crossterm) - event loop, undo stack, buffer 
     - system monitor with ratatui
     - Roguelike
+  - GUI
+    - Project with Iced, gpui
   - Port [`spinup`](https://github.com/jaz303/spinup)
   - Data: CSV query engine
   - mini database engine
