@@ -37,16 +37,21 @@ struct Pos {
     col: usize,
 }
 
+enum PosTrackerNewlineState {
+    Out,
+    In,
+}
+
 struct PosTracker {
     pos: Pos,
-    state: usize,
+    state: PosTrackerNewlineState,
 }
 
 impl PosTracker {
     fn new() -> PosTracker {
         PosTracker {
             pos: Pos { line: 0, col: 0 },
-            state: 0,
+            state: PosTrackerNewlineState::In,
         }
     }
 
@@ -55,23 +60,25 @@ impl PosTracker {
     fn push(&mut self, b: u8) -> Pos {
         let out = self.pos;
 
-        // messy! we'll learn enums and matching later!
-        if self.state == 0 {
-            if b == b'\n' {
-                self.pos.line += 1;
-                self.pos.col = 0;
-            } else if b == b'\r' {
-                self.pos.line += 1;
-                self.pos.col = 0;
-                self.state = 1;
-            } else {
-                self.pos.col += 1;
+        match self.state {
+            PosTrackerNewlineState::Out => {
+                if b == b'\n' {
+                    self.pos.line += 1;
+                    self.pos.col = 0;
+                } else if b == b'\r' {
+                    self.pos.line += 1;
+                    self.pos.col = 0;
+                    self.state = PosTrackerNewlineState::In;
+                } else {
+                    self.pos.col += 1;
+                }
             }
-        } else {
-            if b != b'\n' {
-                self.pos.col += 1;
+            PosTrackerNewlineState::In => {
+                if b != b'\n' {
+                    self.pos.col += 1;
+                }
+                self.state = PosTrackerNewlineState::Out;
             }
-            self.state = 0;
         }
 
         out
