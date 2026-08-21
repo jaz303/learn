@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::fs::File;
+use std::io::BufReader;
 use std::io::Read;
 
 // Very simple "grep" implementation for scanning a single file for a byte pattern
@@ -7,7 +8,7 @@ use std::io::Read;
 // TODO
 //
 // [x] Basic matching
-// [ ] Match position reporting
+// [x] Match position reporting
 // [ ] Print matching lines
 // [ ] Add highlighting to matches
 // [ ] Support multiple files
@@ -30,6 +31,53 @@ struct Args {
     path: String,
 }
 
+#[derive(Debug, Copy, Clone)]
+struct Pos {
+    line: usize,
+    col: usize,
+}
+
+struct PosTracker {
+    pos: Pos,
+    state: usize,
+}
+
+impl PosTracker {
+    fn new() -> PosTracker {
+        PosTracker {
+            pos: Pos { line: 0, col: 0 },
+            state: 0,
+        }
+    }
+
+    // push a byte into the tracker
+    // returns the character's position
+    fn push(&mut self, b: u8) -> Pos {
+        let out = self.pos;
+
+        // messy! we'll learn enums and matching later!
+        if self.state == 0 {
+            if b == b'\n' {
+                self.pos.line += 1;
+                self.pos.col = 0;
+            } else if b == b'\r' {
+                self.pos.line += 1;
+                self.pos.col = 0;
+                self.state = 1;
+            } else {
+                self.pos.col += 1;
+            }
+        } else {
+            if b != b'\n' {
+                self.pos.col += 1;
+            }
+            self.state = 0;
+        }
+
+        out
+    }
+}
+
 fn main() -> Result<(), std::io::Error> {
     let args = Args::parse();
 
@@ -50,6 +98,8 @@ fn main() -> Result<(), std::io::Error> {
     // let ring: Vec<u8> = Vec::with_capacity(args.pattern.len());
     let mut ring = vec![0; pattern.len()];
 
+    let mut pos_ring = vec![Pos { line: 0, col: 0 }; pattern.len()];
+
     // open file
     let mut file = File::open(args.path)?;
 
@@ -64,6 +114,11 @@ fn main() -> Result<(), std::io::Error> {
         Err(err) => return Err(err),
     }
 
+    let mut pos_tracker = PosTracker::new();
+    for i in 0..pattern.len() - 1 {
+        pos_ring[i] = pos_tracker.push(ring[i]);
+    }
+
     // borrow a mutable reference to ring buffer's backing store
     // 2nd form is more idiomatic... leaving the first in as a comment to remind me that you
     // can borrow an arbitrary slice view of the backing store.
@@ -73,16 +128,21 @@ fn main() -> Result<(), std::io::Error> {
     // ring buffer write pointer
     let mut wp: usize = pattern.len() - 1;
 
+    // create a buffered reader, for efficiency!
+    let mut reader = BufReader::new(file);
+
     // hereafter the algorithm is simply
     //   - read next byte into ring buffer
     //   - compare against head of buffer
     loop {
         let mut b = [0u8; 1];
-        let nread = file.read(&mut b)?;
+        let nread = reader.read(&mut b)?;
         if nread == 0 {
             break;
         }
+
         buffer[wp] = b[0];
+        pos_ring[wp] = pos_tracker.push(b[0]);
         wp = (wp + 1) % pattern.len();
 
         // wp is now sitting at the first byte to match
@@ -95,7 +155,8 @@ fn main() -> Result<(), std::io::Error> {
         }
 
         if is_match {
-            println!("got a match!");
+            let match_pos = pos_ring[wp];
+            println!("got a match at {},{}", match_pos.line, match_pos.col);
         }
     }
 
