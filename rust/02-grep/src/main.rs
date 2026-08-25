@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::fs::File;
-use std::io::BufReader;
-use std::io::Read;
+use std::io::{BufRead, BufReader};
+use std::ops::Range;
 
 // Very simple "grep" implementation for scanning a single file for a byte pattern
 //
@@ -9,9 +9,10 @@ use std::io::Read;
 //
 // [x] Basic matching
 // [x] Match position reporting
-// [ ] Print matching lines
-// [ ] Add highlighting to matches
+// [x] Print matching lines
+// [x] Add highlighting to matches
 // [ ] Support multiple files
+// [ ] Write tests for split()
 //
 // I think this would be enough to get the gist, there are obvious improvements we could make:
 //   - optimised matching (KMP, BM, probably some SIMD algorithms to investigate)
@@ -19,6 +20,9 @@ use std::io::Read;
 //   - print surrounding context
 //
 // We'll see...
+
+const HL_ON: &str = "\x1b[31m";
+const HL_OFF: &str = "\x1b[0m";
 
 #[derive(Parser, Debug)]
 #[command(name = "grep")]
@@ -31,58 +35,46 @@ struct Args {
     path: String,
 }
 
-#[derive(Debug, Copy, Clone)]
-struct Pos {
-    line: usize,
-    col: usize,
+struct Chunk {
+    range: Range<usize>,
+    is_match: bool,
 }
 
-enum PosTrackerNewlineState {
-    Out,
-    In,
-}
+fn split(pattern: &str, line: &str) -> (Vec<Chunk>, i32) {
+    let mut out: Vec<Chunk> = Vec::new();
 
-struct PosTracker {
-    pos: Pos,
-    state: PosTrackerNewlineState,
-}
+    let mut matches = 0;
+    let mut pos = 0;
 
-impl PosTracker {
-    fn new() -> PosTracker {
-        PosTracker {
-            pos: Pos { line: 0, col: 0 },
-            state: PosTrackerNewlineState::In,
+    // i know there are probably better ways (e.g. line.match_indices()) but for learning
+    // purposes i wanted to do this by hand.
+    'outer: while pos < line.len() {
+        match line[pos..].find(pattern) {
+            Some(ix) => {
+                if ix > 0 {
+                    out.push(Chunk {
+                        range: pos..pos + ix,
+                        is_match: false,
+                    })
+                }
+                out.push(Chunk {
+                    range: pos + ix..pos + ix + pattern.len(),
+                    is_match: true,
+                });
+                pos += (ix + pattern.len());
+                matches += 1;
+            }
+            None => {
+                out.push(Chunk {
+                    range: pos..line.len(),
+                    is_match: false,
+                });
+                break 'outer;
+            }
         }
     }
 
-    // push a byte into the tracker
-    // returns the character's position
-    fn push(&mut self, b: u8) -> Pos {
-        let out = self.pos;
-
-        match self.state {
-            PosTrackerNewlineState::Out => {
-                if b == b'\n' {
-                    self.pos.line += 1;
-                    self.pos.col = 0;
-                } else if b == b'\r' {
-                    self.pos.line += 1;
-                    self.pos.col = 0;
-                    self.state = PosTrackerNewlineState::In;
-                } else {
-                    self.pos.col += 1;
-                }
-            }
-            PosTrackerNewlineState::In => {
-                if b != b'\n' {
-                    self.pos.col += 1;
-                }
-                self.state = PosTrackerNewlineState::Out;
-            }
-        }
-
-        out
-    }
+    (out, matches)
 }
 
 fn main() -> Result<(), std::io::Error> {
@@ -96,74 +88,35 @@ fn main() -> Result<(), std::io::Error> {
         ));
     }
 
-    // we want to match bytes, so convert args.pattern to bytes - we own them now.
-    let pattern = args.pattern.into_bytes();
-
-    // ring buffer
-    // 2nd line is more idiomatic (and slightly different - it actually fills it with elements
-    // whereas i think the first just creates an empty vector with the given capacity.
-    // let ring: Vec<u8> = Vec::with_capacity(args.pattern.len());
-    let mut ring = vec![0; pattern.len()];
-
-    let mut pos_ring = vec![Pos { line: 0, col: 0 }; pattern.len()];
-
     // open file
-    let mut file = File::open(args.path)?;
-
-    // seed the buffer with the initial bytes (up to pattern length - 1)
-    // what we're doing here is borrowing a mutable slice from the vector
-    match file.read_exact(&mut ring[0..pattern.len() - 1]) {
-        Ok(()) => { /* bytes read OK - nothing to do */ }
-        Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
-            // if we couldn't read len(pattern) bytes, there can be no match, so exit early
-            return Ok(());
-        }
-        Err(err) => return Err(err),
-    }
-
-    let mut pos_tracker = PosTracker::new();
-    for i in 0..pattern.len() - 1 {
-        pos_ring[i] = pos_tracker.push(ring[i]);
-    }
-
-    // borrow a mutable reference to ring buffer's backing store
-    // 2nd form is more idiomatic... leaving the first in as a comment to remind me that you
-    // can borrow an arbitrary slice view of the backing store.
-    // let buffer = &mut ring[0..pattern.len()];
-    let buffer = &mut ring[..];
-
-    // ring buffer write pointer
-    let mut wp: usize = pattern.len() - 1;
-
-    // create a buffered reader, for efficiency!
+    let file = File::open(&args.path)?;
     let mut reader = BufReader::new(file);
+    let mut line_buf = String::new();
+    let mut line_no = 0;
 
-    // hereafter the algorithm is simply
-    //   - read next byte into ring buffer
-    //   - compare against head of buffer
-    loop {
-        let mut b = [0u8; 1];
-        let nread = reader.read(&mut b)?;
-        if nread == 0 {
-            break;
-        }
-
-        buffer[wp] = b[0];
-        pos_ring[wp] = pos_tracker.push(b[0]);
-        wp = (wp + 1) % pattern.len();
-
-        // wp is now sitting at the first byte to match
-        let mut is_match = true;
-        for i in 0..pattern.len() {
-            if buffer[(wp + i) % pattern.len()] != pattern[i] {
-                is_match = false;
-                break;
+    'outer: loop {
+        line_buf.clear();
+        line_no += 1;
+        match reader.read_line(&mut line_buf) {
+            Ok(size) => {
+                if size == 0 {
+                    break 'outer;
+                }
+                let (chunks, matches) = split(&args.pattern, &line_buf);
+                if matches > 0 {
+                    print!("{}:{}:", &args.path, line_no);
+                    for chunk in chunks {
+                        if chunk.is_match {
+                            print!("{HL_ON}");
+                            print!("{}", &line_buf[chunk.range]);
+                            print!("{HL_OFF}");
+                        } else {
+                            print!("{}", &line_buf[chunk.range]);
+                        }
+                    }
+                }
             }
-        }
-
-        if is_match {
-            let match_pos = pos_ring[wp];
-            println!("got a match at {},{}", match_pos.line, match_pos.col);
+            Err(e) => return Err(e),
         }
     }
 
