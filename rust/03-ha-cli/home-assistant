@@ -1,0 +1,8 @@
+docker run -d \
+  --name jwf-learn-rust-ha-cli \
+  -p 8123:8123 \
+  --restart=unless-stopped \
+  -e TZ=Europe/London \
+  -v "$PWD/ha-config":/config \
+  ghcr.io/home-assistant/home-assistant:stable
+
