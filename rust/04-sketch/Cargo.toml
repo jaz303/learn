@@ -1,0 +1,12 @@
+[package]
+name = "sketch"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = "0.23.1"
+clap = { version = "4.6.7", features = ["derive"] }
+crossterm = "0.29.0"
+notify = "8.2.0"
+tiny-skia = "0.12.0"
+rand = "0.10.3"
