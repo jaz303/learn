@@ -41,43 +41,6 @@ impl KittyRenderer {
         }
     }
 
-    // // call this whenever crossterm detects a resize event;
-    // // we communicate with Kitty to find out what the new
-    // // image size is
-    // pub fn resync(&mut self) -> Result<(i32, i32), Box<dyn Error>> {
-    //     self.output.write_all(b"\x1b[14t")?;
-    //     self.output.flush()?;
-    //
-    //     // to set the type explicitly, do this:
-    //     // let mut hdr = [0u8; 8];
-    //     // but Rust performs type inference over the entire function body
-    //     // so this actually works fine...
-    //     let mut hdr = [0; 8];
-    //
-    //     // read the header
-    //     self.input.read_exact(&mut hdr[0..4])?;
-    //     if hdr[0] != 0x1b || hdr[1] != b'[' || hdr[2] != b'4' || hdr[3] != b';' {
-    //         eprintln!("invalid escape sequence received")
-    //     }
-    //
-    //     let mut br = BufReader::new(&self.input);
-    //
-    //     self.tmp.clear();
-    //     let size = br.read_until(b';', &mut self.tmp)?;
-    //     let height_str = str::from_utf8(&self.tmp[0..size - 1])?;
-    //     let height: i32 = height_str.parse()?;
-    //
-    //     self.tmp.clear();
-    //     let size = br.read_until(b't', &mut self.tmp)?;
-    //     let width_str = str::from_utf8(&self.tmp[0..size - 1])?;
-    //     let width: i32 = width_str.parse()?;
-    //
-    //     self.width = width;
-    //     self.height = height;
-    //
-    //     Ok((width, height))
-    // }
-
     pub fn draw(&mut self, image: &Pixmap) -> io::Result<()> {
         let image_id = self.last_image_id + 1;
         let width = image.width();
