@@ -1,22 +1,12 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::write::EncoderWriter;
 use std::cmp::min;
-use std::error::Error;
-use std::io::{self, BufRead, BufReader, Read, Stdin, Stdout, Write};
-use tiny_skia::{Color, Pixmap};
+use std::io::{self, Stdout, Write};
+use tiny_skia::Pixmap;
 
 pub struct KittyRenderer {
-    input: Stdin,
     output: Stdout,
-
-    // origin is cell coordinates
-    origin_x: u16,
-    origin_y: u16,
-    width: i32,
-    height: i32,
-
     last_image_id: u32,
-
     tmp: Vec<u8>,
 }
 
@@ -28,14 +18,9 @@ impl Drop for KittyRenderer {
 }
 
 impl KittyRenderer {
-    pub fn new(input: Stdin, output: Stdout, x: u16, y: u16) -> Self {
+    pub fn new(output: Stdout) -> Self {
         Self {
-            input,
             output,
-            origin_x: x,
-            origin_y: y,
-            width: -1,
-            height: -1,
             last_image_id: 0,
             tmp: Vec::new(),
         }
@@ -46,10 +31,9 @@ impl KittyRenderer {
         let width = image.width();
         let height = image.height();
 
-        // Encode the image to base64 in memory
-        let mut encoded = Vec::new();
+        self.tmp.clear();
         {
-            let mut encoder = EncoderWriter::new(&mut encoded, &STANDARD);
+            let mut encoder = EncoderWriter::new(&mut self.tmp, &STANDARD);
             encoder.write_all(image.data())?;
             encoder.finish()?;
         }
@@ -67,23 +51,24 @@ impl KittyRenderer {
             "\x1b_Ga=T,f=32,t=d,C=1,i={image_id},s={width},v={height}"
         )?;
 
+        // must be a multiple of 4
         let data_bytes_per_chunk = 4032;
 
-        if encoded.len() <= data_bytes_per_chunk {
+        if self.tmp.len() <= data_bytes_per_chunk {
             // single chunk
             write!(self.output, ";")?;
-            self.output.write_all(&encoded)?;
+            self.output.write_all(&self.tmp)?;
             write!(self.output, "\x1b\\")?;
         } else {
             // multiple chunks
 
             // write the first chunk as part of the first (header) message...
             write!(self.output, ",m=1;")?;
-            self.output.write_all(&encoded[0..data_bytes_per_chunk])?;
+            self.output.write_all(&self.tmp[0..data_bytes_per_chunk])?;
             write!(self.output, "\x1b\\")?;
 
             // ...then the remaining chunks
-            let mut to_write = &mut encoded[data_bytes_per_chunk..];
+            let mut to_write = &mut self.tmp[data_bytes_per_chunk..];
             while !to_write.is_empty() {
                 if to_write.len() <= data_bytes_per_chunk {
                     write!(self.output, "\x1b_Gm=0;")?;

@@ -1,5 +1,7 @@
+mod drawing_context;
 mod kitty;
 
+use crate::drawing_context::DrawingContext;
 use crate::kitty::KittyRenderer;
 use clap::Parser;
 use crossterm::event::{self, KeyCode, KeyModifiers};
@@ -9,7 +11,9 @@ use notify::event::ModifyKind;
 use notify::{Event, RecursiveMode, Watcher};
 use rand::random;
 use std::error::Error;
-use std::io::{Write, stdin, stdout};
+use std::io::{stdin, stdout};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 use std::{fs, path::Path, sync::mpsc};
 use tiny_skia::{Color, Pixmap};
 
@@ -76,11 +80,6 @@ fn term_event_pump(tx: mpsc::Sender<SketchEvent>) {
         }
     }
 }
-
-fn make_image(width: u16, height: u16) -> Result<Pixmap, Box<dyn Error>> {
-    Ok(Pixmap::new(width.try_into()?, height.try_into()?).unwrap())
-}
-
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
@@ -89,13 +88,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     //
     //
 
-    let mut kr = KittyRenderer::new(stdin(), stdout(), 0, 0);
+    let mut kr = KittyRenderer::new(stdout());
 
     let size = terminal::window_size()?;
-    let mut img = make_image(size.width, size.height)?;
-    img.fill(Color::from_rgba(1.0, 0.0, 0.0, 1.0).unwrap());
 
-    kr.draw(&img)?;
+    let mut dc = DrawingContext::new(u32::from(size.width), u32::from(size.height))?;
+    dc.clear();
+
+    kr.draw(&dc.image)?;
 
     //
     //
@@ -128,30 +128,64 @@ fn main() -> Result<(), Box<dyn Error>> {
     })?;
 
     watcher.watch(Path::new(&args.file), RecursiveMode::NonRecursive)?;
-    'pump: for res in rx {
-        match res {
-            SketchEvent::ContentChanged => {
-                let source = fs::read_to_string(&args.file)?;
-                // eprintln!("{source}");
+
+    let mut last_frame_rendered_at = Instant::now();
+    let mut run = true;
+    while run {
+        loop {
+            let evt = rx.try_recv();
+            if evt.is_err() {
+                break;
             }
-            SketchEvent::TerminalResized(width, height) => {
-                let size = terminal::window_size()?;
-                if size.width == 0 || size.height == 0 {
-                    println!("no window size!");
+            match evt? {
+                SketchEvent::ContentChanged => {
+                    let source = fs::read_to_string(&args.file)?;
+                    // eprintln!("{source}");
                 }
-                img = make_image(size.width, size.height)?;
-                img.fill(Color::from_rgba(random(), random(), random(), 1.0).unwrap());
-                kr.draw(&img)?;
-            }
-            SketchEvent::TerminalError(_err) => {
-                println!("TERMINAL ERROR");
-                break 'pump;
-            }
-            SketchEvent::Tick => {}
-            SketchEvent::Quit => {
-                break 'pump;
+                SketchEvent::TerminalResized(width, height) => {
+                    let size = terminal::window_size()?;
+                    if size.width == 0 || size.height == 0 {
+                        println!("no window size!");
+                    }
+                    dc.resize(u32::from(size.width), u32::from(size.height))?;
+                }
+                SketchEvent::TerminalError(_err) => {
+                    println!("TERMINAL ERROR");
+                    run = false;
+                }
+                SketchEvent::Tick => {}
+                SketchEvent::Quit => {
+                    run = false;
+                }
             }
         }
+
+        //
+        // This is where the Lua update() call will be...
+
+        dc.set_fill(Color::from_rgba(random(), random(), random(), 1.0).unwrap());
+        let x: f32 = random::<f32>() * (dc.width() as f32);
+        let y: f32 = random::<f32>() * (dc.height() as f32);
+        let w: f32 = random::<f32>() * 100.0;
+        let h: f32 = random::<f32>() * 100.0;
+        dc.fill_rect(x, y, w, h);
+
+        //
+        //
+
+        let render_due_at = last_frame_rendered_at + Duration::from_micros(1_000_000 / 30);
+        let sleep_time = render_due_at - Instant::now();
+        if sleep_time.is_zero() {
+            dc.set_fill(Color::from_rgba(1.0, 0.0, 0.0, 1.0).unwrap());
+        } else {
+            dc.set_fill(Color::from_rgba(0.0, 1.0, 0.0, 1.0).unwrap());
+            sleep(sleep_time);
+        }
+
+        last_frame_rendered_at = Instant::now();
+
+        dc.fill_rect(0.0, 0.0, 10.0, 10.0);
+        kr.draw(&dc.image)?;
     }
 
     Ok(())
