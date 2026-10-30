@@ -34,6 +34,7 @@ impl DrawingContext {
         let image = Pixmap::new(width, height);
         match image {
             Some(mut new_image) => {
+                new_image.fill(Color::from_rgba(0., 0., 0., 1.).unwrap());
                 let paint = PixmapPaint::default();
                 new_image.draw_pixmap(
                     0,

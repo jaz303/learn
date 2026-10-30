@@ -7,11 +7,15 @@ use clap::Parser;
 use crossterm::event::{self, KeyCode, KeyModifiers};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute, terminal};
+use mlua::{FromLua, Function, Lua, Value};
 use notify::event::ModifyKind;
 use notify::{Event, RecursiveMode, Watcher};
 use rand::random;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::{stdin, stdout};
+use std::rc::Rc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use std::{fs, path::Path, sync::mpsc};
@@ -32,7 +36,6 @@ enum SketchEvent {
     ContentChanged,
     TerminalResized(u16, u16),
     TerminalError(std::io::Error),
-    Tick,
     Quit,
 }
 
@@ -80,6 +83,41 @@ fn term_event_pump(tx: mpsc::Sender<SketchEvent>) {
         }
     }
 }
+
+fn lua_bind(lua: &Lua, dc: Rc<RefCell<DrawingContext>>) {
+    let ctx = Rc::clone(&dc);
+    let fn_fill_rect = lua
+        .create_function(move |_, (x, y, w, h): (f32, f32, f32, f32)| {
+            let mut foo = ctx.try_borrow_mut().unwrap();
+            foo.fill_rect(x, y, w, h);
+            Ok(())
+        })
+        .unwrap();
+
+    let ctx = Rc::clone(&dc);
+    let fn_fill = lua
+        .create_function(move |_, (r, g, b): (f32, f32, f32)| {
+            let mut foo = ctx.try_borrow_mut().unwrap();
+            foo.set_fill(Color::from_rgba(r, g, b, 1.0).unwrap());
+            Ok(())
+        })
+        .unwrap();
+
+    let fn_rand = lua.create_function(|_, ()| Ok(random::<f64>())).unwrap();
+
+    let fn_print = lua
+        .create_function(|_, text: String| {
+            println!("{text}");
+            Ok(())
+        })
+        .unwrap();
+
+    lua.globals().set("random", fn_rand).unwrap();
+    lua.globals().set("my_print", fn_print).unwrap();
+    lua.globals().set("fillRect", fn_fill_rect).unwrap();
+    lua.globals().set("fill", fn_fill).unwrap();
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
@@ -94,13 +132,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut dc = DrawingContext::new(u32::from(size.width), u32::from(size.height))?;
     dc.clear();
-
     kr.draw(&dc.image)?;
+
+    let lua = Lua::new();
+    let drawing_context = Rc::new(RefCell::new(dc));
+
+    lua_bind(&lua, Rc::clone(&drawing_context));
 
     //
     //
 
     let source = fs::read_to_string(&args.file)?;
+    let hooks: HashMap<String, Function> = lua.load(source).call(())?;
     // eprintln!("{source}");
 
     let (tx, rx) = mpsc::channel::<SketchEvent>();
@@ -147,45 +190,40 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if size.width == 0 || size.height == 0 {
                         println!("no window size!");
                     }
-                    dc.resize(u32::from(size.width), u32::from(size.height))?;
+                    {
+                        let mut foo = drawing_context.try_borrow_mut()?;
+                        foo.resize(u32::from(size.width), u32::from(size.height))?;
+                    }
                 }
                 SketchEvent::TerminalError(_err) => {
                     println!("TERMINAL ERROR");
                     run = false;
                 }
-                SketchEvent::Tick => {}
                 SketchEvent::Quit => {
                     run = false;
                 }
             }
         }
 
-        //
-        // This is where the Lua update() call will be...
-
-        dc.set_fill(Color::from_rgba(random(), random(), random(), 1.0).unwrap());
-        let x: f32 = random::<f32>() * (dc.width() as f32);
-        let y: f32 = random::<f32>() * (dc.height() as f32);
-        let w: f32 = random::<f32>() * 100.0;
-        let h: f32 = random::<f32>() * 100.0;
-        dc.fill_rect(x, y, w, h);
-
-        //
-        //
+        match hooks.get("loop") {
+            Some(loop_fn) => _ = loop_fn.call::<Value>(()),
+            None => {}
+        }
 
         let render_due_at = last_frame_rendered_at + Duration::from_micros(1_000_000 / 30);
         let sleep_time = render_due_at - Instant::now();
-        if sleep_time.is_zero() {
-            dc.set_fill(Color::from_rgba(1.0, 0.0, 0.0, 1.0).unwrap());
-        } else {
-            dc.set_fill(Color::from_rgba(0.0, 1.0, 0.0, 1.0).unwrap());
-            sleep(sleep_time);
+        {
+            let mut dc = drawing_context.try_borrow_mut()?;
+            if sleep_time.is_zero() {
+                dc.set_fill(Color::from_rgba(1.0, 0.0, 0.0, 1.0).unwrap());
+            } else {
+                dc.set_fill(Color::from_rgba(0.0, 1.0, 0.0, 1.0).unwrap());
+                sleep(sleep_time);
+            }
+            last_frame_rendered_at = Instant::now();
+            dc.fill_rect(0.0, 0.0, 10.0, 10.0);
+            kr.draw(&dc.image)?;
         }
-
-        last_frame_rendered_at = Instant::now();
-
-        dc.fill_rect(0.0, 0.0, 10.0, 10.0);
-        kr.draw(&dc.image)?;
     }
 
     Ok(())
